@@ -1,3 +1,5 @@
+**Note: This repo was moved from the ego4d-consortium account to be inline with the remainder of repos all under /EGO4D/.  If you have previously pulled from that repo, you will need to reset or checkout the repo from scratch again to further update.  We apologize of any inconvenience!**
+
 # Ego4D Episodic Memory Benchmark
 
 [EGO4D](https://ego4d-data.org/docs/) is the world's largest egocentric (first person) video ML dataset and benchmark suite.
