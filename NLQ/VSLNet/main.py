@@ -173,16 +173,22 @@ def main(configs, parser):
                     global_step % eval_period == 0
                     or global_step % num_train_batches == 0
                 ):
+                    start_indices, end_indices = model.extract_index(start_logits, end_logits)
+                    start_indices = start_indices.cpu().numpy()
+                    end_indices = end_indices.cpu().numpy()
+
                     model.eval()
-                    print(
-                        f"\nEpoch: {epoch + 1:2d} | Step: {global_step:5d}", flush=True
-                    )
+                    #print(
+                    #    f"\nEpoch: {epoch + 1:2d} | Step: {global_step:5d}", flush=True
+                    #)
+                    print(f"\nEpoch: {epoch + 1:2d} | Step: {global_step:5d} | Pred Start: {start_indices[0,0]:4f} | Gt Start: {s_labels[0]:4f} | Pred End: {end_indices[0,0]:4f} | Gt End: {e_labels[0]:4f}", flush=True)
+
                     result_save_path = os.path.join(
                         model_dir,
                         f"{configs.model_name}_{epoch}_{global_step}_preds.json",
                     )
                     plot_save_path = os.path.join(
-                        model_dir,
+                        'model_dir',
                         f"{configs.model_name}_error.png",
                     )
                     loss_list.append(total_loss.item())
