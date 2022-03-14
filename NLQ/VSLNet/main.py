@@ -7,6 +7,7 @@ import numpy as np
 import options
 import torch
 import torch.nn as nn
+import matplotlib.pyplot as plt
 from model.VSLNet import build_optimizer_and_scheduler, VSLNet
 from tqdm import tqdm
 from utils.data_gen import gen_or_load_dataset
@@ -83,7 +84,7 @@ def main(configs, parser):
     if configs.mode.lower() == "train":
         if not os.path.exists(model_dir):
             os.makedirs(model_dir)
-        eval_period = num_train_batches // 2
+        eval_period = max(num_train_batches // 2,1)
         save_json(
             vars(configs),
             os.path.join(model_dir, "configs.json"),
@@ -102,6 +103,7 @@ def main(configs, parser):
         )
         print("start training...", flush=True)
         global_step = 0
+        loss_list=[]
         for epoch in range(configs.epochs):
             model.train()
             for data in tqdm(
@@ -179,6 +181,16 @@ def main(configs, parser):
                         model_dir,
                         f"{configs.model_name}_{epoch}_{global_step}_preds.json",
                     )
+                    plot_save_path = os.path.join(
+                        model_dir,
+                        f"{configs.model_name}_error.png",
+                    )
+                    loss_list.append(total_loss.item())
+                    plt.plot(loss_list)
+                    plt.xlabel("Epochs")
+                    plt.ylabel("Loss")
+                    plt.title("Loss over Training")
+                    plt.savefig(plot_save_path)
                     # Evaluate on val, keep the top 3 checkpoints.
                     results, mIoU, score_str = eval_test(
                         model=model,
