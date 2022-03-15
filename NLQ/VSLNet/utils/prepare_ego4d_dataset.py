@@ -30,15 +30,40 @@ def process_question(question):
     """Process the question to make it canonical."""
     return question.strip(" ").strip("?").lower() + "?"
 
+def load_narrations(path):
+    read_path=os.path.join(path)
+    with open(read_path, "r") as file_id:
+        raw_data = json.load(file_id)
 
-def reformat_data(split_data, test_split=False):
+    return raw_data
+
+def process_narration(narration_data, video_uid, time_stamps):
+    narrations = narration_data[video_uid]
+    start, end =time_stamps
+    output=[]
+    for n in narrations.keys():
+        if n=="status":
+            continue
+        n_start = narrations[n]["summaries"][0]["start_sec"]
+        n_end = narrations[n]["summaries"][0]["end_sec"]
+
+        for narration in narrations[n]['narrations']:
+            frame = narration['timestamp_frame']
+
+            if (start <= frame) and (end >= frame):
+                output.append(narration['narration_text'])
+
+    return output
+
+
+def reformat_data(split_data, narration_data,test_split=False,max_size=750):
     """Convert the format from JSON files.
     fps, num_frames, timestamps, sentences, exact_times,
     annotation_uids, query_idx.
     """
     formatted_data = {}
     clip_video_map = {}
-    for video_datum in split_data["videos"]:
+    for video_datum in split_data["videos"][:max_size]:
         for clip_datum in video_datum["clips"]:
             clip_uid = clip_datum["clip_uid"]
             clip_video_map[clip_uid] = (
@@ -56,6 +81,7 @@ def reformat_data(split_data, test_split=False):
                 "sentences": [],
                 "annotation_uids": [],
                 "query_idx": [],
+                "narrations": []
             }
 
             for ann_datum in clip_datum["annotations"]:
@@ -74,17 +100,20 @@ def reformat_data(split_data, test_split=False):
                     new_dict["annotation_uids"].append(ann_datum["annotation_uid"])
                     new_dict["query_idx"].append(index)
                     new_dict["exact_times"].append([start_time, end_time]),
+                    start_frame = get_nearest_frame(start_time, math.floor)
+                    end_frame = get_nearest_frame(end_time, math.ceil)
                     new_dict["timestamps"].append(
                         [
-                            get_nearest_frame(start_time, math.floor),
-                            get_nearest_frame(end_time, math.ceil),
+                            start_frame,
+                            end_frame,
                         ]
                     )
+                    new_dict["narrations"].append(process_narration(narration_data, video_datum["video_uid"], [start_frame, end_frame]))
             formatted_data[clip_uid] = new_dict
     return formatted_data, clip_video_map
 
 
-def convert_ego4d_dataset(args):
+def convert_ego4d_dataset(args, narration_data):
     """Convert the Ego4D dataset for VSLNet."""
     # Reformat the splits to train vslnet.
     all_clip_video_map = {}
@@ -93,7 +122,11 @@ def convert_ego4d_dataset(args):
         print(f"Reading [{split}]: {read_path}")
         with open(read_path, "r") as file_id:
             raw_data = json.load(file_id)
-        data_split, clip_video_map = reformat_data(raw_data, split == "test")
+        if split=="train":
+            max_size=1
+        else:
+            max_size=1
+        data_split, clip_video_map = reformat_data(raw_data, narration_data,split == "test", max_size)
         all_clip_video_map.update(clip_video_map)
         num_instances = sum(len(ii["sentences"]) for ii in data_split.values())
         print(f"# {split}: {num_instances}")
@@ -149,9 +182,14 @@ if __name__ == "__main__":
         required=True,
         help="Path to save clip video features",
     )
+    parser.add_argument(
+        "--narration_read_path", required=True, help="Path to read narrations"
+    )
     try:
         parsed_args = vars(parser.parse_args())
     except (IOError) as msg:
         parser.error(str(msg))
-
-    convert_ego4d_dataset(parsed_args)
+    
+    narration_data=load_narrations(parsed_args['narration_read_path'])
+    convert_ego4d_dataset(parsed_args, narration_data)
+    #load_narrations(parsed_args['narration_read_path'])

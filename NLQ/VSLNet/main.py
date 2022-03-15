@@ -54,6 +54,7 @@ def main(configs, parser):
     test_loader = get_test_loader(
         dataset=dataset["test_set"], video_features=visual_features, configs=configs
     )
+    print(len(train_loader))
     configs.num_train_steps = len(train_loader) * configs.epochs
     num_train_batches = len(train_loader)
     num_val_batches = 0 if val_loader is None else len(val_loader)
@@ -188,7 +189,7 @@ def main(configs, parser):
                         f"{configs.model_name}_{epoch}_{global_step}_preds.json",
                     )
                     plot_save_path = os.path.join(
-                        'model_dir',
+                        model_dir,
                         f"{configs.model_name}_error.png",
                     )
                     loss_list.append(total_loss.item())
