@@ -14,6 +14,7 @@ import os
 
 import torch
 import tqdm
+from transformers import BertTokenizer, BertModel
 
 
 CANONICAL_VIDEO_FPS = 30.0
@@ -94,6 +95,10 @@ def convert_ego4d_dataset(args):
         with open(read_path, "r") as file_id:
             raw_data = json.load(file_id)
         data_split, clip_video_map = reformat_data(raw_data, split == "test")
+        # if split == "train":
+        #     clip_video_map = { k: v for i, (k,v) in enumerate(clip_video_map.items()) if i < 10 }
+        # print(len(clip_video_map.items()))
+        # import ipdb; ipdb.set_trace()
         all_clip_video_map.update(clip_video_map)
         num_instances = sum(len(ii["sentences"]) for ii in data_split.values())
         print(f"# {split}: {num_instances}")
@@ -104,18 +109,69 @@ def convert_ego4d_dataset(args):
         with open(save_path, "w") as file_id:
             json.dump(data_split, file_id)
 
+    with open("/home/jayant/big_drive/ego4d_data/v1/annotations/narration.json") as f:
+        narrations = json.load(f)
+    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+    bert = BertModel.from_pretrained("bert-base-uncased")
+    
+    # Gaussian filtering
+    from scipy import signal
+    window_size = 11
+    # std=2 roughly corresponds to feature window size for timespan = 1s
+    window = torch.tensor(signal.windows.gaussian(window_size, std=2), dtype=torch.float32)
+
+    def extract_bert_feature_with_filtering(sentence):
+        with torch.no_grad():
+            inputs = tokenizer(sentence, return_tensors="pt")
+            outputs = bert(**inputs)
+            last_hidden_states = outputs.last_hidden_state
+            embedding = last_hidden_states.squeeze().mean(0)
+            embedding /= embedding.norm()
+            embedding = torch.outer(window, embedding)
+            return embedding
+
     # Extract visual features based on the all_clip_video_map.
     feature_sizes = {}
     os.makedirs(args["clip_feature_save_path"], exist_ok=True)
-    progress_bar = tqdm.tqdm(all_clip_video_map.items(), desc="Extracting features")
+    progress_bar = tqdm.tqdm(list(all_clip_video_map.items()), desc="Extracting features")
     for clip_uid, (video_uid, start_sec, end_sec) in progress_bar:
         feature_path = os.path.join(args["video_feature_read_path"], f"{video_uid}.pt")
-        feature = torch.load(feature_path)
+        try:
+            feature = torch.load(feature_path)
+        except Exception as e:
+            print(e)
+            continue
 
         # Get the lower frame (start_sec) and upper frame (end_sec) for the clip.
         clip_start = get_nearest_frame(start_sec, math.floor)
         clip_end = get_nearest_frame(end_sec, math.ceil)
         clip_feature = feature[clip_start : clip_end + 1]
+
+        # Narration features
+        narration = narrations[video_uid]
+        if narration["status"] == "redacted":
+            tqdm.tqdm.write("Clip redacted.")
+            narration_feature = torch.zeros((clip_feature.shape[0], 768))
+        else:
+            narration_feature = []
+            for n in narration["narration_pass_2"]["narrations"]:
+                n_timestamp = n["timestamp_sec"]
+                if start_sec <= n_timestamp <= end_sec:
+                    n_ftr = extract_bert_feature_with_filtering(n["narration_text"])
+                    n_frame = get_nearest_frame(n_timestamp, math.floor) - clip_start
+                    clip_length_feature = torch.zeros((clip_feature.shape[0], n_ftr.shape[-1]))
+                    sw, ew = n_frame - window_size//2, n_frame + window_size//2 + 1
+                    s, e = max(0, sw), min(len(clip_length_feature), ew)
+                    clip_length_feature[s:e] = n_ftr[s-sw:e-sw]
+                    narration_feature.append(clip_length_feature)
+            if len(narration_feature) > 0:
+                narration_feature = torch.stack(narration_feature).mean(0)
+            else:
+                tqdm.tqdm.write("No narrations found for clip.")
+                narration_feature = torch.zeros((clip_feature.shape[0], 768))
+
+        clip_feature = torch.cat((clip_feature, narration_feature), -1)
+
         feature_sizes[clip_uid] = clip_feature.shape[0]
         feature_save_path = os.path.join(
             args["clip_feature_save_path"], f"{clip_uid}.pt"
