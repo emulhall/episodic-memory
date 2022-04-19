@@ -158,6 +158,12 @@ def main(configs, parser):
                     start_logits, end_logits, s_labels, e_labels
                 )
                 total_loss = loc_loss + configs.highlight_lambda * highlight_loss
+                if global_step % len(train_loader) == 0:
+                    tqdm.write(f"Total loss: {total_loss.item():.04f}")
+                    sdiff = np.abs(s_labels.cpu().numpy() - torch.argmax(start_logits, axis=1).detach().cpu().numpy())
+                    ediff = np.abs(e_labels.cpu().numpy() - torch.argmax(end_logits, axis=1).detach().cpu().numpy())
+                    tqdm.write(f"Start_end_diff: {sdiff.sum()} | {ediff.sum()} | {sdiff.sum() + ediff.sum()}")
+                    tqdm.write("--------------------------")
                 # compute and apply gradients
                 optimizer.zero_grad()
                 total_loss.backward()
@@ -168,8 +174,9 @@ def main(configs, parser):
                 scheduler.step()
                 # evaluate
                 if (
-                    global_step % eval_period == 0
-                    or global_step % num_train_batches == 0
+                    # global_step % eval_period == 0
+                    # or global_step % num_train_batches == 0
+                    epoch % 10 == 0 and global_step % num_train_batches == 0
                 ):
                     model.eval()
                     print(
