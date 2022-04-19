@@ -126,7 +126,7 @@ def convert_ego4d_dataset(args):
             outputs = bert(**inputs)
             last_hidden_states = outputs.last_hidden_state
             embedding = last_hidden_states.squeeze().mean(0)
-            embedding /= embedding.norm()
+            # embedding /= embedding.norm()
             embedding = torch.outer(window, embedding)
             return embedding
 
@@ -165,7 +165,7 @@ def convert_ego4d_dataset(args):
                     clip_length_feature[s:e] = n_ftr[s-sw:e-sw]
                     narration_feature.append(clip_length_feature)
             if len(narration_feature) > 0:
-                narration_feature = torch.stack(narration_feature).mean(0)
+                narration_feature = torch.stack(narration_feature).sum(0)
             else:
                 tqdm.tqdm.write("No narrations found for clip.")
                 narration_feature = torch.zeros((clip_feature.shape[0], 768))
