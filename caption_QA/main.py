@@ -66,7 +66,7 @@ captions = []
 fps = int(video.get(cv2.CAP_PROP_FPS))
 while video.isOpened():
     r, frame = video.read()
-    pil_image = PIL.Image.fromarray(frame)
+    pil_image = PIL.Image.fromarray(frame[:, :, [2, 1, 0]])
     image = preprocess(pil_image).unsqueeze(0).to(device)
     with torch.no_grad():
         prefix = clip_model.encode_image(image).to(device, dtype=torch.float32)
