@@ -1,5 +1,6 @@
 import clip
 import json
+import time
 from model_archs import ClipCaptionModel, ClipCaptionPrefix
 from caption_prediction import generate2
 import cv2
@@ -60,79 +61,97 @@ model = model.eval()
 model = model.to(device)
 
 # Read Video and generate Captions
-video_path = "/Users/abhirajmohan/ego4d_data/v1/full_scale/d250521e-5197-44aa-8baa-2f42b24444d2.mp4"
-video = cv2.VideoCapture(video_path)
-captions = []
-fps = int(video.get(cv2.CAP_PROP_FPS))
-while video.isOpened():
-    r, frame = video.read()
-    pil_image = PIL.Image.fromarray(frame[:, :, [2, 1, 0]])
-    image = preprocess(pil_image).unsqueeze(0).to(device)
-    with torch.no_grad():
-        prefix = clip_model.encode_image(image).to(device, dtype=torch.float32)
-        prefix_embed = model.clip_project(prefix).reshape(1, prefix_length, -1)
-    generated_text_prefix = generate2(model, tokenizer, embed=prefix_embed)
-    captions.append(generated_text_prefix)
-captions = captions[::fps]
+ego4d_dataroot = "/home/jayant/big_drive/ego4d_data/v1"
+video_path = lambda video_uid: os.path.join(ego4d_dataroot, "full_scale", f"{video_uid}.mp4")
+# video_uid = "d250521e-5197-44aa-8baa-2f42b24444d2"  # read from the video path
 
-# Read queries and answers
-with open("annotations/nlq_train.json") as f:
-    annotations = json.load(f)
-video_uid = "d250521e-5197-44aa-8baa-2f42b24444d2"  # read from the video path
-annotation = [a for a in annotations['videos'] if a['video_uid'] == video_uid][0]
-queries = []
-for clip in annotation["clips"]:
-    for ann in clip["annotations"]:
-        if "language_queries" in ann:
-            queries.extend([(q["query"],
-                             q["video_start_sec"],
-                             q["video_end_sec"]) for q in ann["language_queries"] if "query" in q])
+# inc_t specifies the captioning fps in terms of caption_every_{inc_t}_seconds
+# inc_t=5 implies caption one frame every 5s
+def generate_image_captions_for_video(video_uid, inc_t=5):
+    video = cv2.VideoCapture(video_path(video_uid))
+    captions = []
+    fps = video.get(cv2.CAP_PROP_FPS)
+    nframes = video.get(cv2.CAP_PROP_FRAME_COUNT)
+    duration = (nframes / fps)
+    cur_t = 0
+    st = time.time()
+    while cur_t < duration:
+        video.set(cv2.CAP_PROP_POS_MSEC, cur_t * 1000) # convert to milliseconds
+        r, frame = video.read()
+        pil_image = PIL.Image.fromarray(frame[..., ::-1])
+        image = preprocess(pil_image).unsqueeze(0).to(device)
+        with torch.no_grad():
+            prefix = clip_model.encode_image(image).to(device, dtype=torch.float32)
+            prefix_embed = model.clip_project(prefix).reshape(1, prefix_length, -1)
+        generated_text_prefix = generate2(model, tokenizer, embed=prefix_embed)
+        captions.append((generated_text_prefix, cur_t))
+        cur_t += inc_t
+    et = time.time()
+    print(f"Captioning took {et-st:.02f} seconds.")
+    return captions
 
 bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
 bert_model = BertModel.from_pretrained("bert-base-uncased")
 
+# Read queries and answers
+with open(os.path.join(ego4d_dataroot, "annotations", "nlq_train.json")) as f:
+    annotations = json.load(f)
 
-with torch.no_grad():
-    narration_embeddings = []
-    for caption in captions:
-        inputs = tokenizer(caption, return_tensors="pt")
-        outputs = model(**inputs)
-        last_hidden_states = outputs.last_hidden_state
-        embedding = last_hidden_states.squeeze().mean(0)
-        embedding /= embedding.norm()
-        narration_embeddings.append(embedding)
+# annotation = [a for a in annotations['videos'] if a['video_uid'] == video_uid][0]
+for annotation in tqdm(annotations["videos"]):
+    video_uid = annotation["video_uid"]
+    captions = generate_image_captions_for_video(video_uid, inc_t=60)
 
-with torch.no_grad():
-    for query in queries:
-        try:
-            inputs = tokenizer(query[0], return_tensors="pt")
-        except:
-            print(f"Could not tokenize {query[0]}, skipping ..")
-            continue
-        outputs = model(**inputs)
-        last_hidden_states = outputs.last_hidden_state
-        embedding = last_hidden_states.squeeze().mean(0)
-        embedding /= embedding.norm()
+    queries = []
+    for clip in annotation["clips"]:
+        for ann in clip["annotations"]:
+            if "language_queries" in ann:
+                queries.extend([(q["query"],
+                                 q["video_start_sec"],
+                                 q["video_end_sec"]) for q in ann["language_queries"] if "query" in q])
 
-        dot_products = torch.tensor([torch.dot(emb, embedding) for emb in narration_embeddings])
-        idx = torch.argsort(dot_products, descending=True)
 
-        for i in [3, 5, 10]:
-            acc_ = 0.
-            for idx_ in idx[:i]:
-                if query[1] <= captions[idx_][1] <= query[2]:
-                    acc_ = 1.
-                    break
-            if i == 3:
-                acc3.append(acc_)
-            elif i == 5:
-                acc5.append(acc_)
-            else:
-                acc10.append(acc_)
+    with torch.no_grad():
+        narration_embeddings = []
+        for caption in captions:
+            inputs = bert_tokenizer(caption[0], return_tensors="pt")
+            outputs = bert_model(**inputs)
+            last_hidden_states = outputs.last_hidden_state
+            embedding = last_hidden_states.squeeze().mean(0)
+            embedding /= embedding.norm()
+            narration_embeddings.append(embedding)
 
-        m = idx[0]
+    with torch.no_grad():
+        for query in queries:
+            try:
+                inputs = bert_tokenizer(query[0], return_tensors="pt")
+            except:
+                print(f"Could not tokenize {query[0]}, skipping ..")
+                continue
+            outputs = bert_model(**inputs)
+            last_hidden_states = outputs.last_hidden_state
+            embedding = last_hidden_states.squeeze().mean(0)
+            embedding /= embedding.norm()
 
-        acc_ = 1. if (query[1] <= captions[m][1] <= query[2]) else 0.
-        acc.append(acc_)
+            dot_products = torch.tensor([torch.dot(emb, embedding) for emb in narration_embeddings])
+            idx = torch.argsort(dot_products, descending=True)
+
+            for i in [3, 5, 10]:
+                acc_ = 0.
+                for idx_ in idx[:i]:
+                    if query[1] <= captions[idx_][1] <= query[2]:
+                        acc_ = 1.
+                        break
+                if i == 3:
+                    acc3.append(acc_)
+                elif i == 5:
+                    acc5.append(acc_)
+                else:
+                    acc10.append(acc_)
+
+            m = idx[0]
+
+            acc_ = 1. if (query[1] <= captions[m][1] <= query[2]) else 0.
+            acc.append(acc_)
 
 print(np.mean(acc), np.mean(acc3), np.mean(acc5), np.mean(acc10))
