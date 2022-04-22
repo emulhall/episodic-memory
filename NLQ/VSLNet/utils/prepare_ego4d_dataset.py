@@ -38,24 +38,6 @@ def load_narrations(path):
 
     return raw_data
 
-def process_narration(narration_data, video_uid, time_stamps):
-    narrations = narration_data[video_uid]
-    start, end =time_stamps
-    output=[]
-    for n in narrations.keys():
-        if n=="status":
-            continue
-        n_start = narrations[n]["summaries"][0]["start_sec"]
-        n_end = narrations[n]["summaries"][0]["end_sec"]
-
-        for narration in narrations[n]['narrations']:
-            frame = narration['timestamp_frame']
-
-            if (start <= frame) and (end >= frame):
-                output.append(narration['narration_text'])
-
-    return output
-
 
 def reformat_data(split_data, narration_data,test_split=False,max_size=750):
     """Convert the format from JSON files.
@@ -64,7 +46,7 @@ def reformat_data(split_data, narration_data,test_split=False,max_size=750):
     """
     formatted_data = {}
     clip_video_map = {}
-    for video_datum in split_data["videos"][:max_size]:
+    for video_datum in split_data["videos"]:
         for clip_datum in video_datum["clips"]:
             clip_uid = clip_datum["clip_uid"]
             clip_video_map[clip_uid] = (
@@ -81,8 +63,7 @@ def reformat_data(split_data, narration_data,test_split=False,max_size=750):
                 "exact_times": [],
                 "sentences": [],
                 "annotation_uids": [],
-                "query_idx": [],
-                "narrations": []
+                "query_idx": []
             }
 
             for ann_datum in clip_datum["annotations"]:
@@ -109,12 +90,11 @@ def reformat_data(split_data, narration_data,test_split=False,max_size=750):
                             end_frame,
                         ]
                     )
-                    new_dict["narrations"].append(process_narration(narration_data, video_datum["video_uid"], [start_frame, end_frame]))
             formatted_data[clip_uid] = new_dict
     return formatted_data, clip_video_map
 
 
-def convert_ego4d_dataset(args, narration_data):
+def convert_ego4d_dataset(args):
     """Convert the Ego4D dataset for VSLNet."""
     # Reformat the splits to train vslnet.
     all_clip_video_map = {}
@@ -123,19 +103,13 @@ def convert_ego4d_dataset(args, narration_data):
         print(f"Reading [{split}]: {read_path}")
         with open(read_path, "r") as file_id:
             raw_data = json.load(file_id)
-<<<<<<< HEAD
-        if split=="train":
-            max_size=1
-        else:
-            max_size=1
-        data_split, clip_video_map = reformat_data(raw_data, narration_data,split == "test", max_size)
-=======
+        #data_split, clip_video_map = reformat_data(raw_data, narration_data,split == "test", max_size)
         data_split, clip_video_map = reformat_data(raw_data, split == "test")
         # if split == "train":
         #     clip_video_map = { k: v for i, (k,v) in enumerate(clip_video_map.items()) if i < 10 }
         # print(len(clip_video_map.items()))
         # import ipdb; ipdb.set_trace()
->>>>>>> cf734d6826f5ae47b0ecab9583e5b9cae1cfc3b0
+        #>>>>>>> cf734d6826f5ae47b0ecab9583e5b9cae1cfc3b0
         all_clip_video_map.update(clip_video_map)
         num_instances = sum(len(ii["sentences"]) for ii in data_split.values())
         print(f"# {split}: {num_instances}")
@@ -146,7 +120,7 @@ def convert_ego4d_dataset(args, narration_data):
         with open(save_path, "w") as file_id:
             json.dump(data_split, file_id)
 
-    with open("/home/jayant/big_drive/ego4d_data/v1/annotations/narration.json") as f:
+    with open(args["narration_read_path"]) as f:
         narrations = json.load(f)
     tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
     bert = BertModel.from_pretrained("bert-base-uncased")
@@ -190,7 +164,7 @@ def convert_ego4d_dataset(args, narration_data):
             tqdm.tqdm.write("Clip redacted.")
             narration_feature = torch.zeros((clip_feature.shape[0], 768))
         else:
-            narration_feature = []
+            narration_feature = None
             for n in narration["narration_pass_2"]["narrations"]:
                 n_timestamp = n["timestamp_sec"]
                 if start_sec <= n_timestamp <= end_sec:
@@ -200,14 +174,21 @@ def convert_ego4d_dataset(args, narration_data):
                     sw, ew = n_frame - window_size//2, n_frame + window_size//2 + 1
                     s, e = max(0, sw), min(len(clip_length_feature), ew)
                     clip_length_feature[s:e] = n_ftr[s-sw:e-sw]
-                    narration_feature.append(clip_length_feature)
-            if len(narration_feature) > 0:
-                narration_feature = torch.stack(narration_feature).sum(0)
-            else:
+                    #Switched from the original appending and stacking because my computer didn't have the cpu
+                    #Instead just summed along the way
+                    if narration_feature is None:
+                        narration_feature = clip_length_feature
+                    else:
+                        narration_feature = torch.stack([narration_feature, clip_length_feature]).sum(0)
+                    #narration_feature.append(clip_length_feature.cuda())
+            #if len(narration_feature) > 0:
+            #    narration_feature = torch.stack(narration_feature).sum(0)
+            if narration_feature is None:
                 tqdm.tqdm.write("No narrations found for clip.")
                 narration_feature = torch.zeros((clip_feature.shape[0], 768))
 
-        clip_feature = torch.cat((clip_feature, narration_feature), -1)
+        #clip_feature = torch.cat((clip_feature, narration_feature.cpu()), -1)
+        clip_feature = narration_feature
 
         feature_sizes[clip_uid] = clip_feature.shape[0]
         feature_save_path = os.path.join(
@@ -250,6 +231,4 @@ if __name__ == "__main__":
     except (IOError) as msg:
         parser.error(str(msg))
     
-    narration_data=load_narrations(parsed_args['narration_read_path'])
-    convert_ego4d_dataset(parsed_args, narration_data)
-    #load_narrations(parsed_args['narration_read_path'])
+    convert_ego4d_dataset(parsed_args)
