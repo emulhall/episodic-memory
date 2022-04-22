@@ -11,6 +11,7 @@ import csv
 import json
 import math
 import os
+import pickle
 
 import torch
 import tqdm
@@ -89,7 +90,8 @@ def convert_ego4d_dataset(args):
     """Convert the Ego4D dataset for VSLNet."""
     # Reformat the splits to train vslnet.
     all_clip_video_map = {}
-    for split in ("train", "val", "test"):
+    redacted_count = 0
+    for split in ("train", "val"):
         read_path = args[f"input_{split}_split"]
         print(f"Reading [{split}]: {read_path}")
         with open(read_path, "r") as file_id:
@@ -97,7 +99,7 @@ def convert_ego4d_dataset(args):
         data_split, clip_video_map = reformat_data(raw_data, split == "test")
         # if split == "train":
         #     clip_video_map = { k: v for i, (k,v) in enumerate(clip_video_map.items()) if i < 10 }
-        # print(len(clip_video_map.items()))
+        print(len(clip_video_map.items()))
         # import ipdb; ipdb.set_trace()
         all_clip_video_map.update(clip_video_map)
         num_instances = sum(len(ii["sentences"]) for ii in data_split.values())
@@ -108,27 +110,33 @@ def convert_ego4d_dataset(args):
         print(f"Writing [{split}]: {save_path}")
         with open(save_path, "w") as file_id:
             json.dump(data_split, file_id)
+    print(len(all_clip_video_map.items()))
 
-    with open("/home/jayant/big_drive/ego4d_data/v1/annotations/narration.json") as f:
-        narrations = json.load(f)
-    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-    bert = BertModel.from_pretrained("bert-base-uncased")
+    # all_clip_features = torch.zeros((0,2304))
+    with open(os.path.join(args["clip_feature_save_path"], "video_feature_statistics.pkl"), "rb") as f:
+        mu, sigma = pickle.load(f)
+
+    if False:
+        with open("/home/jayant/big_drive/ego4d_data/v1/annotations/narration.json") as f:
+            narrations = json.load(f)
+        tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+        bert = BertModel.from_pretrained("bert-base-uncased")
     
-    # Gaussian filtering
-    from scipy import signal
-    window_size = 11
-    # std=2 roughly corresponds to feature window size for timespan = 1s
-    window = torch.tensor(signal.windows.gaussian(window_size, std=2), dtype=torch.float32)
+        # Gaussian filtering
+        from scipy import signal
+        window_size = 11
+        # std=2 roughly corresponds to feature window size for timespan = 1s
+        window = torch.tensor(signal.windows.gaussian(window_size, std=2), dtype=torch.float32)
 
-    def extract_bert_feature_with_filtering(sentence):
-        with torch.no_grad():
-            inputs = tokenizer(sentence, return_tensors="pt")
-            outputs = bert(**inputs)
-            last_hidden_states = outputs.last_hidden_state
-            embedding = last_hidden_states.squeeze().mean(0)
-            # embedding /= embedding.norm()
-            embedding = torch.outer(window, embedding)
-            return embedding
+        def extract_bert_feature_with_filtering(sentence):
+            with torch.no_grad():
+                inputs = tokenizer(sentence, return_tensors="pt")
+                outputs = bert(**inputs)
+                last_hidden_states = outputs.last_hidden_state
+                embedding = last_hidden_states.squeeze().mean(0)
+                # embedding /= embedding.norm()
+                embedding = torch.outer(window, embedding)
+                return embedding
 
     # Extract visual features based on the all_clip_video_map.
     feature_sizes = {}
@@ -147,36 +155,48 @@ def convert_ego4d_dataset(args):
         clip_end = get_nearest_frame(end_sec, math.ceil)
         clip_feature = feature[clip_start : clip_end + 1]
 
-        # Narration features
-        narration = narrations[video_uid]
-        if narration["status"] == "redacted":
-            tqdm.tqdm.write("Clip redacted.")
-            narration_feature = torch.zeros((clip_feature.shape[0], 768))
-        else:
-            narration_feature = []
-            for n in narration["narration_pass_2"]["narrations"]:
-                n_timestamp = n["timestamp_sec"]
-                if start_sec <= n_timestamp <= end_sec:
-                    n_ftr = extract_bert_feature_with_filtering(n["narration_text"])
-                    n_frame = get_nearest_frame(n_timestamp, math.floor) - clip_start
-                    clip_length_feature = torch.zeros((clip_feature.shape[0], n_ftr.shape[-1]))
-                    sw, ew = n_frame - window_size//2, n_frame + window_size//2 + 1
-                    s, e = max(0, sw), min(len(clip_length_feature), ew)
-                    clip_length_feature[s:e] = n_ftr[s-sw:e-sw]
-                    narration_feature.append(clip_length_feature)
-            if len(narration_feature) > 0:
-                narration_feature = torch.stack(narration_feature).sum(0)
-            else:
-                tqdm.tqdm.write("No narrations found for clip.")
+        if False:
+            # Narration features
+            narration = narrations[video_uid]
+            if narration["status"] == "redacted":
+                redacted_count += 1
+                tqdm.tqdm.write(f"Clip redacted | #{redacted_count}")
+                tqdm.tqdm.write(str(narration))
                 narration_feature = torch.zeros((clip_feature.shape[0], 768))
+            else:
+                narration_feature = []
+                for n in narration["narration_pass_2"]["narrations"]:
+                    n_timestamp = n["timestamp_sec"]
+                    if start_sec <= n_timestamp <= end_sec:
+                        n_ftr = extract_bert_feature_with_filtering(n["narration_text"])
+                        n_frame = get_nearest_frame(n_timestamp, math.floor) - clip_start
+                        clip_length_feature = torch.zeros((clip_feature.shape[0], n_ftr.shape[-1]))
+                        sw, ew = n_frame - window_size//2, n_frame + window_size//2 + 1
+                        s, e = max(0, sw), min(len(clip_length_feature), ew)
+                        clip_length_feature[s:e] = n_ftr[s-sw:e-sw]
+                        narration_feature.append(clip_length_feature)
+                if len(narration_feature) > 0:
+                    narration_feature = torch.stack(narration_feature).sum(0)
+                else:
+                    tqdm.tqdm.write("No narrations found for clip.")
+                    narration_feature = torch.zeros((clip_feature.shape[0], 768))
 
-        clip_feature = torch.cat((clip_feature, narration_feature), -1)
+            clip_feature = torch.cat((clip_feature, narration_feature), -1)
 
+        clip_feature = (clip_feature - mu) / sigma
         feature_sizes[clip_uid] = clip_feature.shape[0]
         feature_save_path = os.path.join(
             args["clip_feature_save_path"], f"{clip_uid}.pt"
         )
         torch.save(clip_feature, feature_save_path)
+        # all_clip_features = torch.cat((all_clip_features, clip_feature))
+        # print(all_clip_features.shape)
+
+    if False:
+        mu = torch.mean(all_clip_features, dim=0)
+        sigma = torch.std(all_clip_features, dim=0)
+        with open(os.path.join(args["clip_feature_save_path"], "video_feature_statistics.pkl"), "wb") as f:
+            pickle.dump((mu, sigma), f)
 
     save_path = os.path.join(args["clip_feature_save_path"], "feature_shapes.json")
     with open(save_path, "w") as file_id:
