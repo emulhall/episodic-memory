@@ -114,7 +114,8 @@ def convert_ego4d_dataset(args):
 
     # all_clip_features = torch.zeros((0,2304))
     with open(os.path.join(args["clip_feature_save_path"], "video_feature_statistics.pkl"), "rb") as f:
-        mu, sigma = pickle.load(f)
+        mu, _ = pickle.load(f)
+        mu = mu.mean()
 
     if False:
         with open("/home/jayant/big_drive/ego4d_data/v1/annotations/narration.json") as f:
@@ -183,7 +184,7 @@ def convert_ego4d_dataset(args):
 
             clip_feature = torch.cat((clip_feature, narration_feature), -1)
 
-        clip_feature = (clip_feature - mu) / sigma
+        clip_feature = clip_feature - mu
         feature_sizes[clip_uid] = clip_feature.shape[0]
         feature_save_path = os.path.join(
             args["clip_feature_save_path"], f"{clip_uid}.pt"
