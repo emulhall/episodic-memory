@@ -18,6 +18,8 @@ from tqdm import tqdm, trange
 # import skimage.io as io
 import PIL.Image
 # from IPython.display import Image
+from pprint import pprint
+import pickle
 
 N = type(None)
 V = np.array
@@ -46,6 +48,7 @@ def get_device(device_id: int) -> D:
 
 CUDA = get_device
 acc, acc3, acc5, acc10 = [], [], [], []
+DEBUG_SEGFAULT = False
 
 # Load model architecture
 device = CUDA(0)
@@ -67,7 +70,11 @@ video_path = lambda video_uid: os.path.join(ego4d_dataroot, "full_scale", f"{vid
 
 # inc_t specifies the captioning fps in terms of caption_every_{inc_t}_seconds
 # inc_t=5 implies caption one frame every 5s
+total_captioned_duration = 0
 def generate_image_captions_for_video(video_uid, inc_t=5):
+    global total_captioned_duration
+    if DEBUG_SEGFAULT:
+        tqdm.write(video_path(video_uid))
     video = cv2.VideoCapture(video_path(video_uid))
     captions = []
     fps = video.get(cv2.CAP_PROP_FPS)
@@ -76,8 +83,15 @@ def generate_image_captions_for_video(video_uid, inc_t=5):
     cur_t = 0
     st = time.time()
     while cur_t < duration:
+        if DEBUG_SEGFAULT:
+            tqdm.write(f"Reading frame {cur_t:.02f} | {duration:.02f} ..")
         video.set(cv2.CAP_PROP_POS_MSEC, cur_t * 1000) # convert to milliseconds
         r, frame = video.read()
+        if DEBUG_SEGFAULT:
+            tqdm.write("Done")
+        if not r:
+            print(f"Could not read frame even though cur_t={cur_t:.02f} < duration={duration:.02f}")
+            break
         pil_image = PIL.Image.fromarray(frame[..., ::-1])
         image = preprocess(pil_image).unsqueeze(0).to(device)
         with torch.no_grad():
@@ -87,7 +101,8 @@ def generate_image_captions_for_video(video_uid, inc_t=5):
         captions.append((generated_text_prefix, cur_t))
         cur_t += inc_t
     et = time.time()
-    print(f"Captioning took {et-st:.02f} seconds.")
+    total_captioned_duration += duration / 3600
+    tqdm.write(f"Captioning took {et-st:.0f}s | Total captioned duration @ freq {inc_t}s : {total_captioned_duration:.02f} hours")
     return captions
 
 bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
@@ -98,9 +113,33 @@ with open(os.path.join(ego4d_dataroot, "annotations", "nlq_train.json")) as f:
     annotations = json.load(f)
 
 # annotation = [a for a in annotations['videos'] if a['video_uid'] == video_uid][0]
-for annotation in tqdm(annotations["videos"]):
+for ii, annotation in tqdm(enumerate(annotations["videos"]), total=len(annotations["videos"])):
     video_uid = annotation["video_uid"]
-    captions = generate_image_captions_for_video(video_uid, inc_t=60)
+    if video_uid in [ 
+            "250d59fc-e1e3-479e-946d-f108d4f38275", 
+            "21dabbc1-d8b9-4631-846b-4e8a0fc60048", 
+            "40359e3f-931e-4c0b-8d8b-a87d1773320f",
+            "0ca23a40-6daf-4503-bfa2-f315a79b7317",
+            "d8c894ab-7b08-4983-9e80-fdb5d6ee0202",
+            "155f8d74-4c5c-4821-a18b-fceaa9c6199c",
+            "dfdfde56-5e0f-4e8f-aa5b-73fae9336086",
+            "b367b7d2-180e-48c6-b4b3-34e770acbbd4",
+            "968139e2-987e-4615-a2d4-fa2e683bae8a",
+            "f0917e7a-e945-473d-95a6-12a1b4cb4e27",
+            "e4dc253e-e5be-4b1e-89c2-ab1a47c486b0",
+            "7f0320b1-b866-4c80-99bf-42125d99b99e",
+            "8d3ac72b-5e56-4bb8-9fb2-7b57c8c9f530",
+            ]:
+        continue
+    
+    captions_savepath = os.path.join("video_captions", f"{video_uid}.pkl")
+    if os.path.exists(captions_savepath):
+        with open(captions_savepath, 'rb') as f:
+            captions = pickle.load(f)
+    else:
+        captions = generate_image_captions_for_video(video_uid)
+        with open(captions_savepath, 'wb') as f:
+            pickle.dump(captions, f)
 
     queries = []
     for clip in annotation["clips"]:
@@ -153,5 +192,8 @@ for annotation in tqdm(annotations["videos"]):
 
             acc_ = 1. if (query[1] <= captions[m][1] <= query[2]) else 0.
             acc.append(acc_)
+
+    if ii % 10 == 0:
+        tqdm.write(f"{np.mean(acc):f}, {np.mean(acc3):f}, {np.mean(acc5):f}, {np.mean(acc10):f}")
 
 print(np.mean(acc), np.mean(acc3), np.mean(acc5), np.mean(acc10))
