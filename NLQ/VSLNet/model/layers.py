@@ -32,6 +32,18 @@ class Conv1D(nn.Module):
         return x.transpose(1, 2)  # (batch_size, seq_len, dim)
 
 
+class BatchNorm1D(nn.Module):
+    def __init__(self, num_features):
+        super(BatchNorm1D, self).__init__()
+        self.bn = nn.BatchNorm1d(num_features)
+
+    def forward(self, x):
+        # suppose all the input with shape (batch_size, seq_len, dim)
+        x = x.transpose(1, 2)  # (batch_size, dim, seq_len)
+        x = self.bn(x)
+        return x.transpose(1, 2)  # (batch_size, seq_len, dim)
+
+
 class WordEmbedding(nn.Module):
     def __init__(self, num_words, word_dim, drop_rate, word_vectors=None):
         super(WordEmbedding, self).__init__()

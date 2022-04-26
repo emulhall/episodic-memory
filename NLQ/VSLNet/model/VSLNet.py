@@ -5,6 +5,8 @@ import torch.nn as nn
 from transformers import AdamW, get_linear_schedule_with_warmup
 
 from model.layers import (
+    BatchNorm1D,
+    Conv1D,
     Embedding,
     VisualProjection,
     FeatureEncoder,
@@ -53,6 +55,8 @@ class VSLNet(nn.Module):
     def __init__(self, configs, word_vectors):
         super(VSLNet, self).__init__()
         self.configs = configs
+        self.align_model = AlignNet(2304, 256)
+        self.align_model2 = AlignNet(768, 256)
         self.video_affine = VisualProjection(
             visual_dim=configs.video_feature_dim,
             dim=configs.dim,
@@ -116,6 +120,11 @@ class VSLNet(nn.Module):
         self.apply(init_weights)
 
     def forward(self, word_ids, char_ids, video_features, v_mask, q_mask):
+        # map video features for alignment
+        video_feats, narr_feats = video_features[..., :2304], video_features[..., 2304:]
+        video_feats = self.align_model(video_feats)
+        narr_feats = self.align_model2(narr_feats)
+        video_features = torch.cat((video_feats, narr_feats), -1)
         video_features = self.video_affine(video_features)
         if self.configs.predictor == "bert":
             query_features = self.embedding_net(word_ids)
@@ -149,3 +158,43 @@ class VSLNet(nn.Module):
             start_labels=start_labels,
             end_labels=end_labels,
         )
+
+
+class AlignNet(nn.Module):
+    def __init__(self, visual_dim, dim):
+        super(AlignNet, self).__init__()
+        self.model = nn.Sequential(
+            Conv1D(
+                in_dim=visual_dim,
+                out_dim=dim,
+                kernel_size=1,
+                stride=1,
+                bias=True,
+                padding=0,
+            ),
+            nn.ReLU(),
+            BatchNorm1D(dim),
+            Conv1D(
+                in_dim=dim,
+                out_dim=128,
+                kernel_size=1,
+                stride=1,
+                bias=True,
+                padding=0,
+            ),
+            nn.ReLU(),
+            BatchNorm1D(128),
+            Conv1D(
+                in_dim=128,
+                out_dim=128,
+                kernel_size=1,
+                stride=1,
+                bias=True,
+                padding=0,
+            ),
+            nn.ReLU(),
+            BatchNorm1D(128)
+            )
+
+    def forward(self, visual_features):
+        return self.model(visual_features)
