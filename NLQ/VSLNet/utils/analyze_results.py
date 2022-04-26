@@ -61,12 +61,12 @@ def parse_results(args):
 
     results = results["results"]
     for r in results:
-        temp_dict = {}
-        temp_dict["clip_uid"] = r["clip_uid"]
         video_id=None
         for v in data["videos"]:
             for c in v["clips"]:
                 if c["clip_uid"]==r["clip_uid"]:
+                    temp_dict = {}
+                    temp_dict["clip_uid"] = r["clip_uid"]
                     video_id = v["video_uid"]
                     narration = narrations[video_id]
 
@@ -94,6 +94,7 @@ def parse_results(args):
                     predicted_times = r["predicted_times"]
                     
                     temp_dict["IOU"] = compute_IoU(predicted_times[0],gt_time)
+                    output.append(temp_dict)
 
 
                     break
@@ -102,7 +103,6 @@ def parse_results(args):
             if video_id!=None:
                 break
 
-        output.append(temp_dict)
     try:
         with open(args["output_path"], 'w') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
