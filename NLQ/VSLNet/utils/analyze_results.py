@@ -79,18 +79,20 @@ def parse_results(args):
                         for n in narration["narration_pass_2"]["narrations"]:
                             n_time_stamp = n["timestamp_sec"]
 
-                            start_sec = c["clip_start_sec"]
-                            end_sec = c["clip_end_sec"]
+                            #start_sec = c["clip_start_sec"]
+                            #end_sec = c["clip_end_sec"]
+                            start_sec=r["predicted_times"][0][0]
+                            end_sec=r["predicted_times"][0][1]
 
                             if start_sec <= n_time_stamp <= end_sec:
-                                clip_start = get_nearest_frame(start_sec, math.floor)
+                                '''clip_start = get_nearest_frame(start_sec, math.floor)
                                 clip_end = get_nearest_frame(end_sec, math.floor)
                                 n_frame = get_nearest_frame(n_time_stamp, math.floor)-start_sec
                                 sw, ew = n_frame - window_size//2, n_frame + window_size//2 + 1
                                 s, e = max(0, sw), min(((clip_end+1)-clip_start), ew)
 
-                                if ((e-s)>0):
-                                    temp_dict["narration"].append(n["narration_text"])
+                                if ((e-s)>0):'''
+                                temp_dict["narration"].append(n["narration_text"])
 
                     for a in c["annotations"]:
                         if a["annotation_uid"]==r["annotation_uid"]:
