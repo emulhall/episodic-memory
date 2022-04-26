@@ -64,8 +64,8 @@ def parse_results(args):
         video_id=None
         for v in data["videos"]:
             for c in v["clips"]:
+                temp_dict = {}
                 if c["clip_uid"]==r["clip_uid"]:
-                    temp_dict = {}
                     temp_dict["clip_uid"] = r["clip_uid"]
                     video_id = v["video_uid"]
                     narration = narrations[video_id]
@@ -74,6 +74,7 @@ def parse_results(args):
                         temp_dict["narration"] = "redacted"
                         
                     else:
+                        temp_dict["narration"]=[]
                         for n in narration["narration_pass_2"]["narrations"]:
                             n_time_stamp = n["timestamp_sec"]
 
@@ -81,7 +82,8 @@ def parse_results(args):
                             end_sec = c["clip_end_sec"]
 
                             if start_sec <= n_time_stamp <= end_sec:
-                                temp_dict["narration"] = n["narration_text"]
+
+                                temp_dict["narration"].append(n["narration_text"])
 
                     for a in c["annotations"]:
                         if a["annotation_uid"]==r["annotation_uid"]:
