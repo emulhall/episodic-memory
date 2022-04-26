@@ -74,6 +74,7 @@ def parse_results(args):
                         temp_dict["narration"] = "redacted"
                         
                     else:
+                        window_size = 11
                         temp_dict["narration"]=[]
                         for n in narration["narration_pass_2"]["narrations"]:
                             n_time_stamp = n["timestamp_sec"]
@@ -82,8 +83,14 @@ def parse_results(args):
                             end_sec = c["clip_end_sec"]
 
                             if start_sec <= n_time_stamp <= end_sec:
+                                clip_start = get_nearest_frame(start_sec, math.floor)
+                                clip_end = get_nearest_frame(end_sec, math.floor)
+                                n_frame = get_nearest_frame(n_time_stamp, math.floor)-start_sec
+                                sw, ew = n_frame - window_size//2, n_frame + window_size//2 + 1
+                                s, e = max(0, sw), min(((clip_end+1)-clip_start), ew)
 
-                                temp_dict["narration"].append(n["narration_text"])
+                                if ((e-s)>0):
+                                    temp_dict["narration"].append(n["narration_text"])
 
                     for a in c["annotations"]:
                         if a["annotation_uid"]==r["annotation_uid"]:
